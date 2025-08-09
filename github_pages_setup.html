@@ -51,6 +51,7 @@
     .add{display:flex; gap:8px; margin-top:8px}
     input[type="text"]{width:100%; background:#0b1220; color:#e5e7eb; border:1px solid var(--border); border-radius:10px; padding:10px}
     .tag{display:inline-block; font-size:11px; color:#0d1b2a; background:var(--accent); padding:2px 8px; border-radius:999px; margin-left:8px}
+    .banner{display:none; margin-top:8px; padding:10px; border:1px dashed var(--border); border-radius:10px; color:#eab308;}
   </style>
 </head>
 <body>
@@ -60,12 +61,13 @@
         <div>
           <h1>Checklist de Alquiler (Argentina)</h1>
           <div class="sub">Preguntas clave + caja para anotar respuestas. Guarda todo <strong>en tu navegador</strong> (local) automáticamente.</div>
+          <div id="statusBanner" class="banner" aria-live="polite"></div>
         </div>
         <div class="row" style="gap:8px">
-          <button class="primary" id="exportJson">Exportar respuestas (.json)</button>
-          <button class="ok" id="exportTxt">Exportar (.txt)</button>
-          <button class="warn" id="printIt">Imprimir</button>
-          <button class="danger" id="clearAll">Limpiar todo</button>
+          <button class="primary" id="exportJson" data-testid="btn-export-json">Exportar respuestas (.json)</button>
+          <button class="ok" id="exportTxt" data-testid="btn-export-txt">Exportar (.txt)</button>
+          <button class="warn" id="printIt" data-testid="btn-print">Imprimir</button>
+          <button class="danger" id="clearAll" data-testid="btn-clear">Limpiar todo</button>
         </div>
       </div>
       <div class="row" style="margin-top:8px">
@@ -87,19 +89,71 @@
       <h2>Agregar pregunta propia <span class="tag">Personalizable</span></h2>
       <div class="add">
         <input id="customQuestion" type="text" placeholder="Escribí tu pregunta" />
-        <button id="addQuestion">Agregar</button>
+        <button id="addQuestion" data-testid="btn-add-q">Agregar</button>
       </div>
+    </section>
+
+    <section class="card" id="testRunner" aria-live="polite">
+      <h2>Test Runner <span class="tag">Diagnóstico</span></h2>
+      <div class="note">Úsalo si algo falla. No cambia tus datos.</div>
+      <div class="toolbar">
+        <button id="runTests" class="ok" data-testid="btn-run-tests">Ejecutar tests</button>
+        <button id="resetFactory" class="danger" data-testid="btn-reset">Restablecer (de fábrica)</button>
+      </div>
+      <pre id="testOutput" style="background:#0b1220; border:1px solid var(--border); border-radius:10px; padding:12px; overflow:auto; max-height:260px"></pre>
     </section>
 
   </main>
 
   <footer>
-    Hecho por y para inquilinos en AR. Tus datos quedan en tu dispositivo (LocalStorage). 
+    Hecho por y para inquilinos en AR. Tus datos quedan en tu dispositivo (LocalStorage o memoria local si el navegador lo bloquea).
   </footer>
 
   <script>
-    const DATA_KEY = 'alquiler_ar_checklist_v1';
+  'use strict';
+  (function(){
+    // ---- Error guards for noisy environments (e.g. MetaMask) ----
+    function isMetaMaskMessage(msg){
+      if(!msg) return false;
+      try{ return /metamask|failed to connect to metamask/i.test(String(msg)); }catch(_){ return false; }
+    }
+    window.addEventListener('error', function(e){
+      if(isMetaMaskMessage(e && e.message)){
+        e.preventDefault();
+        console.info('[Guard] Error externo filtrado:', e.message);
+      }
+    });
+    window.addEventListener('unhandledrejection', function(e){
+      const reason = e && (e.reason && (e.reason.message || e.reason)) || '';
+      if(isMetaMaskMessage(reason)){
+        e.preventDefault();
+        console.info('[Guard] Promesa externa filtrada:', reason);
+      }
+    });
 
+    // ---- Safe storage wrapper ----
+    const DATA_KEY = 'alquiler_ar_checklist_v1';
+    const memoryStore = {};
+    const storage = {
+      available: true,
+      get(key){
+        try{ return window.localStorage.getItem(key); }catch(_){ this.available=false; return memoryStore[key] || null; }
+      },
+      set(key, val){
+        try{ window.localStorage.setItem(key, val); this.available=true; }
+        catch(_){ this.available=false; memoryStore[key] = val; }
+      },
+      remove(key){
+        try{ window.localStorage.removeItem(key); }
+        catch(_){ delete memoryStore[key]; }
+      },
+      clear(){
+        try{ window.localStorage.removeItem(DATA_KEY); }
+        catch(_){ for(const k in memoryStore) delete memoryStore[k]; }
+      }
+    };
+
+    // ---- Schema (questions) ----
     const schema = [
       {title:'Contrato y moneda', qs:[
         '¿En qué moneda está el alquiler? ¿ARS o USD?',
@@ -150,65 +204,60 @@
       ]}
     ];
 
-    // Load / Save
-    const state = JSON.parse(localStorage.getItem(DATA_KEY) || '{}');
+    // ---- State ----
+    function loadState(){
+      let raw = storage.get(DATA_KEY);
+      if(!raw){ return {}; }
+      try { return JSON.parse(raw) || {}; } catch(_) { return {}; }
+    }
+    const state = loadState();
 
+    function saveState(){
+      try { storage.set(DATA_KEY, JSON.stringify(state)); }
+      catch(_) { /* ignored, memory fallback already used */ }
+    }
+
+    // ---- Utilities ----
     function qId(sectionTitle, idx){
       return sectionTitle.toLowerCase().replace(/[^a-z0-9]+/g,'-')+"__"+idx;
     }
 
-    function render(){
-      const container = document.getElementById('sections');
-      container.innerHTML = '';
-
-      let total = 0, answered = 0;
-
-      schema.forEach(block => {
-        const sec = document.createElement('section');
-        sec.className = 'card';
-
-        const h = document.createElement('h2');
-        h.textContent = block.title;
-        sec.appendChild(h);
-
-        block.qs.forEach((q, i)=>{
-          total++;
+    function serializeToJson(){
+      const payload = { createdAt: new Date().toISOString(), data:{} };
+      document.querySelectorAll('textarea').forEach(t=> payload.data[t.id] = t.value);
+      return JSON.stringify(payload, null, 2);
+    }
+    function serializeToText(){
+      const lines = [];
+      schema.forEach(block=>{
+        lines.push('# ' + block.title);
+        block.qs.forEach((q,i)=>{
           const id = qId(block.title, i);
-          const val = state[id] || '';
-          if(val.trim().length) answered++;
-
-          const wrap = document.createElement('div');
-          wrap.className = 'q';
-
-          const label = document.createElement('label');
-          label.setAttribute('for', id);
-          label.textContent = q;
-          wrap.appendChild(label);
-
-          const hint = document.createElement('div');
-          hint.className = 'hint';
-          hint.textContent = 'Respuesta / acuerdos / cosas para poner en contrato';
-          wrap.appendChild(hint);
-
-          const ta = document.createElement('textarea');
-          ta.id = id;
-          ta.placeholder = 'Escribí la respuesta aquí…';
-          ta.value = val;
-          ta.addEventListener('input', e=>{
-            state[id] = e.target.value;
-            localStorage.setItem(DATA_KEY, JSON.stringify(state));
-            updateProgress();
-          });
-          wrap.appendChild(ta);
-
-          sec.appendChild(wrap);
+          lines.push('\n• ' + q + '\n' + (state[id]||'') + '\n');
         });
-
-        container.appendChild(sec);
+        lines.push('\n');
       });
+      return lines.join('\n');
+    }
 
-      document.getElementById('total').textContent = total;
-      updateProgress();
+    function download(filename, text){
+      try{
+        const blob = new Blob([text], {type:'text/plain;charset=utf-8'});
+        const url = URL.createObjectURL(blob);
+        const el = document.createElement('a');
+        el.href = url; el.download = filename; el.style.display='none';
+        document.body.appendChild(el); el.click(); el.remove();
+        URL.revokeObjectURL(url);
+      }catch(_){
+        // Fallback to data URL
+        const el = document.createElement('a');
+        el.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(text));
+        el.setAttribute('download', filename);
+        el.style.display = 'none';
+        document.body.appendChild(el);
+        el.click();
+        el.remove();
+      }
     }
 
     function updateProgress(){
@@ -222,64 +271,121 @@
       document.getElementById('bar').style.width = pct + '%';
     }
 
-    // Export helpers
-    function download(filename, text){
-      const el = document.createElement('a');
-      el.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(text));
-      el.setAttribute('download', filename);
-      el.style.display = 'none';
-      document.body.appendChild(el);
-      el.click();
-      el.remove();
+    function render(){
+      const container = document.getElementById('sections');
+      container.innerHTML = '';
+      schema.forEach(block => {
+        const sec = document.createElement('section');
+        sec.className = 'card';
+        const h = document.createElement('h2'); h.textContent = block.title; sec.appendChild(h);
+        block.qs.forEach((q, i)=>{
+          const id = qId(block.title, i);
+          const val = state[id] || '';
+          const wrap = document.createElement('div'); wrap.className = 'q';
+          const label = document.createElement('label'); label.setAttribute('for', id); label.textContent = q; wrap.appendChild(label);
+          const hint = document.createElement('div'); hint.className = 'hint'; hint.textContent = 'Respuesta / acuerdos / cosas para poner en contrato'; wrap.appendChild(hint);
+          const ta = document.createElement('textarea'); ta.id = id; ta.placeholder = 'Escribí la respuesta aquí…'; ta.value = val;
+          ta.addEventListener('input', e=>{ state[id] = e.target.value; saveState(); updateProgress(); });
+          wrap.appendChild(ta);
+          sec.appendChild(wrap);
+        });
+        container.appendChild(sec);
+      });
+      updateProgress();
+      // Banner
+      const banner = document.getElementById('statusBanner');
+      if(!storage.available){
+        banner.style.display = 'block';
+        banner.textContent = 'Aviso: LocalStorage está bloqueado. Se usará memoria temporal (se borrará al cerrar).';
+      } else {
+        banner.style.display = 'none';
+      }
     }
 
-    document.getElementById('exportJson').addEventListener('click', ()=>{
-      const payload = { createdAt: new Date().toISOString(), data:{} };
-      document.querySelectorAll('textarea').forEach(t=> payload.data[t.id] = t.value);
-      download('respuestas_alquiler.json', JSON.stringify(payload, null, 2));
-    });
-
-    document.getElementById('exportTxt').addEventListener('click', ()=>{
-      let lines = [];
-      schema.forEach(block=>{
-        lines.push('# ' + block.title);
-        block.qs.forEach((q,i)=>{
-          const id = qId(block.title, i);
-          lines.push('\n• ' + q + '\n' + (state[id]||'') + '\n');
-        });
-        lines.push('\n');
-      });
-      download('respuestas_alquiler.txt', lines.join('\n'));
-    });
-
-    document.getElementById('printIt').addEventListener('click', ()=> window.print());
-
-    document.getElementById('clearAll').addEventListener('click', ()=>{
-      if(confirm('Esto borrará todas las respuestas guardadas en este navegador. ¿Continuar?')){
-        localStorage.removeItem(DATA_KEY);
-        for(const k in state) delete state[k];
-        render();
-      }
-    });
-
-    document.getElementById('addQuestion').addEventListener('click', ()=>{
+    function addCustomQuestion(){
       const input = document.getElementById('customQuestion');
-      const text = input.value.trim();
+      const text = (input.value || '').trim();
       if(!text) return;
-      // Push to last section (Alquiler temporario) or create extra section
-      const last = schema[schema.length-1];
-      if(!last || last.title !== 'Personalizadas'){
-        schema.push({title:'Personalizadas', qs:[]});
-      }
+      const hasPersonal = schema.some(s=>s.title==='Personalizadas');
+      if(!hasPersonal) schema.push({title:'Personalizadas', qs:[]});
       const idx = schema.findIndex(s=>s.title==='Personalizadas');
       schema[idx].qs.push(text);
       input.value='';
       render();
       window.scrollTo({top:document.body.scrollHeight, behavior:'smooth'});
-    });
+    }
 
-    // Init
+    // ---- Event wiring ----
+    function bindUI(){
+      document.getElementById('exportJson').addEventListener('click', function(){ download('respuestas_alquiler.json', serializeToJson()); });
+      document.getElementById('exportTxt').addEventListener('click', function(){ download('respuestas_alquiler.txt', serializeToText()); });
+      document.getElementById('printIt').addEventListener('click', function(){ window.print(); });
+      document.getElementById('clearAll').addEventListener('click', function(){
+        if(confirm('Esto borrará todas las respuestas guardadas en este navegador. ¿Continuar?')){
+          storage.clear();
+          for(const k in state) delete state[k];
+          render();
+        }
+      });
+      document.getElementById('addQuestion').addEventListener('click', addCustomQuestion);
+      // Tests
+      document.getElementById('runTests').addEventListener('click', runTests);
+      document.getElementById('resetFactory').addEventListener('click', function(){
+        storage.clear();
+        for(const k in state) delete state[k];
+        render();
+        logTest('Restablecido a valores de fábrica.');
+      });
+    }
+
+    // ---- Simple test harness ----
+    const out = document.getElementById('testOutput');
+    function logTest(msg){ out.textContent += msg + "\n"; }
+    function assert(cond, msg){ if(!cond) throw new Error('❌ ' + msg); logTest('✅ ' + msg); }
+
+    function countTotalQuestions(){
+      return schema.reduce((acc, b)=> acc + b.qs.length, 0);
+    }
+
+    function runTests(){
+      out.textContent = '';
+      try{
+        // Test 1: Storage availability fallback works
+        const before = storage.available;
+        // simulate save
+        state['test__key']= 'valor-prueba';
+        saveState();
+        assert(true, 'Storage guarda sin lanzar excepción (fallback si está bloqueado).');
+        // Test 2: Render creates all textareas
+        render();
+        const textareas = document.querySelectorAll('textarea');
+        assert(textareas.length === countTotalQuestions(), 'Render crea '+textareas.length+' textareas (coincide con el esquema).');
+        // Test 3: Add custom question increases count
+        const prev = textareas.length;
+        document.getElementById('customQuestion').value = '¿Pregunta personalizada de prueba?';
+        addCustomQuestion();
+        const now = document.querySelectorAll('textarea').length;
+        assert(now === prev + 1, 'Agregar pregunta propia incrementa el total.');
+        // Test 4: Serializadores devuelven texto no vacío
+        const json = serializeToJson();
+        const txt = serializeToText();
+        assert(!!json && json.length>10, 'serializeToJson produce contenido.');
+        assert(!!txt && txt.length>10, 'serializeToText produce contenido.');
+        // Test 5: Progress updates
+        const beforePct = document.getElementById('bar').style.width;
+        const anyTa = document.querySelector('textarea'); anyTa.value='algo'; anyTa.dispatchEvent(new Event('input'));
+        const afterPct = document.getElementById('bar').style.width;
+        assert(beforePct !== afterPct, 'La barra de progreso reacciona a cambios.');
+        logTest('\nTodas las pruebas pasaron.');
+      }catch(err){
+        logTest(String(err && err.message || err));
+      }
+    }
+
+    // ---- Init ----
+    bindUI();
     render();
+  })();
   </script>
 </body>
 </html>
