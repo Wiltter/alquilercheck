@@ -36,13 +36,14 @@
     textarea{width:100%; min-height:72px; resize:vertical; background:#0b1220; color:#e5e7eb; border:1px solid var(--border); border-radius:10px; padding:10px}
     .toolbar{display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:12px 0}
     button{cursor:pointer; border:1px solid var(--border); background:#0b1220; color:#e5e7eb; padding:10px 12px; border-radius:10px; font-weight:600}
+    button:hover{opacity:0.9}
     button.primary{background:var(--accent); color:#001018; border-color:transparent}
     button.ok{background:var(--ok); color:#072b1b; border-color:transparent}
     button.warn{background:var(--warn); color:#1c1400; border-color:transparent}
     button.danger{background:var(--danger); color:#2a0707; border-color:transparent}
     .row{display:flex; gap:10px; align-items:center; justify-content:space-between; flex-wrap:wrap}
     .progress{height:10px; background:#0b1220; border:1px solid var(--border); border-radius:999px; overflow:hidden; flex:1}
-    .bar{height:100%; width:0%; background:linear-gradient(90deg, var(--accent), #60a5fa)}
+    .bar{height:100%; width:0%; background:linear-gradient(90deg, var(--accent), #60a5fa); transition: width 0.3s ease}
     .pill{font-size:12px; color:var(--muted)}
     footer{color:var(--muted); font-size:12px; text-align:center; padding:24px}
     .note{font-size:12px; color:var(--muted)}
@@ -52,6 +53,14 @@
     input[type="text"]{width:100%; background:#0b1220; color:#e5e7eb; border:1px solid var(--border); border-radius:10px; padding:10px}
     .tag{display:inline-block; font-size:11px; color:#0d1b2a; background:var(--accent); padding:2px 8px; border-radius:999px; margin-left:8px}
     .banner{display:none; margin-top:8px; padding:10px; border:1px dashed var(--border); border-radius:10px; color:#eab308;}
+    
+    /* Mejoras para GitHub Pages */
+    @media (max-width: 768px) {
+      .wrap { padding: 12px; }
+      .toolbar { justify-content: center; }
+      button { min-width: 120px; font-size: 14px; }
+      .row { flex-direction: column; align-items: stretch; gap: 8px; }
+    }
   </style>
 </head>
 <body>
@@ -112,17 +121,19 @@
   <script>
   'use strict';
   (function(){
-    // ---- Error guards for noisy environments (e.g. MetaMask) ----
+    // ---- Error guards for noisy environments ----
     function isMetaMaskMessage(msg){
       if(!msg) return false;
       try{ return /metamask|failed to connect to metamask/i.test(String(msg)); }catch(_){ return false; }
     }
+    
     window.addEventListener('error', function(e){
       if(isMetaMaskMessage(e && e.message)){
         e.preventDefault();
         console.info('[Guard] Error externo filtrado:', e.message);
       }
     });
+    
     window.addEventListener('unhandledrejection', function(e){
       const reason = e && (e.reason && (e.reason.message || e.reason)) || '';
       if(isMetaMaskMessage(reason)){
@@ -134,22 +145,54 @@
     // ---- Safe storage wrapper ----
     const DATA_KEY = 'alquiler_ar_checklist_v1';
     const memoryStore = {};
+    
     const storage = {
       available: true,
-      get(key){
-        try{ return window.localStorage.getItem(key); }catch(_){ this.available=false; return memoryStore[key] || null; }
+      get: function(key){
+        try{ 
+          return window.localStorage ? window.localStorage.getItem(key) : null; 
+        }catch(_){ 
+          this.available = false; 
+          return memoryStore[key] || null; 
+        }
       },
-      set(key, val){
-        try{ window.localStorage.setItem(key, val); this.available=true; }
-        catch(_){ this.available=false; memoryStore[key] = val; }
+      set: function(key, val){
+        try{ 
+          if(window.localStorage) {
+            window.localStorage.setItem(key, val); 
+            this.available = true; 
+          } else {
+            throw new Error('localStorage no disponible');
+          }
+        }
+        catch(_){ 
+          this.available = false; 
+          memoryStore[key] = val; 
+        }
       },
-      remove(key){
-        try{ window.localStorage.removeItem(key); }
-        catch(_){ delete memoryStore[key]; }
+      remove: function(key){
+        try{ 
+          if(window.localStorage) {
+            window.localStorage.removeItem(key); 
+          }
+        }
+        catch(_){ 
+          delete memoryStore[key]; 
+        }
       },
-      clear(){
-        try{ window.localStorage.removeItem(DATA_KEY); }
-        catch(_){ for(const k in memoryStore) delete memoryStore[k]; }
+      clear: function(){
+        try{ 
+          if(window.localStorage) {
+            window.localStorage.removeItem(DATA_KEY); 
+          }
+        }
+        catch(_){ 
+          for(const k in memoryStore) {
+            if(memoryStore.hasOwnProperty(k)) {
+              delete memoryStore[k];
+            }
+          }
+        }
       }
     };
 
@@ -192,7 +235,7 @@
       {title:'Rescisión, mora y entrega', qs:[
         '¿Cláusula de salida anticipada (penalidad y preaviso)?',
         '¿Intereses por mora y días de gracia?',
-        'Criterios de “daño” al devolver (cómo se evalúa)'
+        'Criterios de "daño" al devolver (cómo se evalúa)'
       ]},
       {title:'Forma de pago y respaldo', qs:[
         '¿Cómo pago (transferencia, billetera, efectivo) y quién emite recibo/factura?',
@@ -206,51 +249,70 @@
 
     // ---- State ----
     function loadState(){
-      let raw = storage.get(DATA_KEY);
+      var raw = storage.get(DATA_KEY);
       if(!raw){ return {}; }
       try { return JSON.parse(raw) || {}; } catch(_) { return {}; }
     }
-    const state = loadState();
+    
+    var state = loadState();
 
     function saveState(){
-      try { storage.set(DATA_KEY, JSON.stringify(state)); }
-      catch(_) { /* ignored, memory fallback already used */ }
+      try { 
+        storage.set(DATA_KEY, JSON.stringify(state)); 
+      }
+      catch(_) { 
+        // ignored, memory fallback already used 
+      }
     }
 
     // ---- Utilities ----
     function qId(sectionTitle, idx){
-      return sectionTitle.toLowerCase().replace(/[^a-z0-9]+/g,'-')+"__"+idx;
+      return sectionTitle.toLowerCase().replace(/[^a-z0-9]+/g,'-') + "__" + idx;
     }
 
     function serializeToJson(){
-      const payload = { createdAt: new Date().toISOString(), data:{} };
-      document.querySelectorAll('textarea').forEach(t=> payload.data[t.id] = t.value);
+      var payload = { 
+        createdAt: new Date().toISOString(), 
+        data: {} 
+      };
+      var textareas = document.querySelectorAll('textarea');
+      for(var i = 0; i < textareas.length; i++){
+        var t = textareas[i];
+        payload.data[t.id] = t.value;
+      }
       return JSON.stringify(payload, null, 2);
     }
+    
     function serializeToText(){
-      const lines = [];
-      schema.forEach(block=>{
+      var lines = [];
+      for(var s = 0; s < schema.length; s++){
+        var block = schema[s];
         lines.push('# ' + block.title);
-        block.qs.forEach((q,i)=>{
-          const id = qId(block.title, i);
-          lines.push('\n• ' + q + '\n' + (state[id]||'') + '\n');
-        });
+        for(var q = 0; q < block.qs.length; q++){
+          var question = block.qs[q];
+          var id = qId(block.title, q);
+          lines.push('\n• ' + question + '\n' + (state[id] || '') + '\n');
+        }
         lines.push('\n');
-      });
+      }
       return lines.join('\n');
     }
 
     function download(filename, text){
       try{
-        const blob = new Blob([text], {type:'text/plain;charset=utf-8'});
-        const url = URL.createObjectURL(blob);
-        const el = document.createElement('a');
-        el.href = url; el.download = filename; el.style.display='none';
-        document.body.appendChild(el); el.click(); el.remove();
+        var blob = new Blob([text], {type:'text/plain;charset=utf-8'});
+        var url = URL.createObjectURL(blob);
+        var el = document.createElement('a');
+        el.href = url; 
+        el.download = filename; 
+        el.style.display = 'none';
+        document.body.appendChild(el); 
+        el.click(); 
+        el.remove();
         URL.revokeObjectURL(url);
       }catch(_){
         // Fallback to data URL
-        const el = document.createElement('a');
+        var el = document.createElement('a');
         el.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(text));
         el.setAttribute('download', filename);
         el.style.display = 'none';
@@ -261,39 +323,65 @@
     }
 
     function updateProgress(){
-      const all = document.querySelectorAll('textarea');
-      const total = all.length;
-      let answered = 0;
-      all.forEach(t=>{ if(t.value.trim().length) answered++; });
-      const pct = total ? Math.round((answered/total)*100) : 0;
+      var all = document.querySelectorAll('textarea');
+      var total = all.length;
+      var answered = 0;
+      for(var i = 0; i < all.length; i++){
+        if(all[i].value.trim().length) answered++;
+      }
+      var pct = total ? Math.round((answered/total)*100) : 0;
       document.getElementById('count').textContent = answered;
       document.getElementById('total').textContent = total;
       document.getElementById('bar').style.width = pct + '%';
     }
 
     function render(){
-      const container = document.getElementById('sections');
+      var container = document.getElementById('sections');
       container.innerHTML = '';
-      schema.forEach(block => {
-        const sec = document.createElement('section');
+      
+      for(var s = 0; s < schema.length; s++){
+        var block = schema[s];
+        var sec = document.createElement('section');
         sec.className = 'card';
-        const h = document.createElement('h2'); h.textContent = block.title; sec.appendChild(h);
-        block.qs.forEach((q, i)=>{
-          const id = qId(block.title, i);
-          const val = state[id] || '';
-          const wrap = document.createElement('div'); wrap.className = 'q';
-          const label = document.createElement('label'); label.setAttribute('for', id); label.textContent = q; wrap.appendChild(label);
-          const hint = document.createElement('div'); hint.className = 'hint'; hint.textContent = 'Respuesta / acuerdos / cosas para poner en contrato'; wrap.appendChild(hint);
-          const ta = document.createElement('textarea'); ta.id = id; ta.placeholder = 'Escribí la respuesta aquí…'; ta.value = val;
-          ta.addEventListener('input', e=>{ state[id] = e.target.value; saveState(); updateProgress(); });
+        var h = document.createElement('h2'); 
+        h.textContent = block.title; 
+        sec.appendChild(h);
+        
+        for(var q = 0; q < block.qs.length; q++){
+          var question = block.qs[q];
+          var id = qId(block.title, q);
+          var val = state[id] || '';
+          var wrap = document.createElement('div'); 
+          wrap.className = 'q';
+          var label = document.createElement('label'); 
+          label.setAttribute('for', id); 
+          label.textContent = question; 
+          wrap.appendChild(label);
+          var hint = document.createElement('div'); 
+          hint.className = 'hint'; 
+          hint.textContent = 'Respuesta / acuerdos / cosas para poner en contrato'; 
+          wrap.appendChild(hint);
+          var ta = document.createElement('textarea'); 
+          ta.id = id; 
+          ta.placeholder = 'Escribí la respuesta aquí…'; 
+          ta.value = val;
+          
+          ta.addEventListener('input', function(e){
+            state[e.target.id] = e.target.value; 
+            saveState(); 
+            updateProgress(); 
+          });
+          
           wrap.appendChild(ta);
           sec.appendChild(wrap);
-        });
+        }
         container.appendChild(sec);
-      });
+      }
+      
       updateProgress();
+      
       // Banner
-      const banner = document.getElementById('statusBanner');
+      var banner = document.getElementById('statusBanner');
       if(!storage.available){
         banner.style.display = 'block';
         banner.textContent = 'Aviso: LocalStorage está bloqueado. Se usará memoria temporal (se borrará al cerrar).';
@@ -303,79 +391,139 @@
     }
 
     function addCustomQuestion(){
-      const input = document.getElementById('customQuestion');
-      const text = (input.value || '').trim();
+      var input = document.getElementById('customQuestion');
+      var text = (input.value || '').trim();
       if(!text) return;
-      const hasPersonal = schema.some(s=>s.title==='Personalizadas');
-      if(!hasPersonal) schema.push({title:'Personalizadas', qs:[]});
-      const idx = schema.findIndex(s=>s.title==='Personalizadas');
-      schema[idx].qs.push(text);
-      input.value='';
+      
+      var hasPersonal = false;
+      for(var i = 0; i < schema.length; i++){
+        if(schema[i].title === 'Personalizadas'){
+          hasPersonal = true;
+          break;
+        }
+      }
+      
+      if(!hasPersonal) {
+        schema.push({title:'Personalizadas', qs:[]});
+      }
+      
+      var idx = -1;
+      for(var i = 0; i < schema.length; i++){
+        if(schema[i].title === 'Personalizadas'){
+          idx = i;
+          break;
+        }
+      }
+      
+      if(idx >= 0){
+        schema[idx].qs.push(text);
+      }
+      
+      input.value = '';
       render();
-      window.scrollTo({top:document.body.scrollHeight, behavior:'smooth'});
+      window.scrollTo({top: document.body.scrollHeight, behavior: 'smooth'});
     }
 
     // ---- Event wiring ----
     function bindUI(){
-      document.getElementById('exportJson').addEventListener('click', function(){ download('respuestas_alquiler.json', serializeToJson()); });
-      document.getElementById('exportTxt').addEventListener('click', function(){ download('respuestas_alquiler.txt', serializeToText()); });
-      document.getElementById('printIt').addEventListener('click', function(){ window.print(); });
+      document.getElementById('exportJson').addEventListener('click', function(){ 
+        download('respuestas_alquiler.json', serializeToJson()); 
+      });
+      
+      document.getElementById('exportTxt').addEventListener('click', function(){ 
+        download('respuestas_alquiler.txt', serializeToText()); 
+      });
+      
+      document.getElementById('printIt').addEventListener('click', function(){ 
+        window.print(); 
+      });
+      
       document.getElementById('clearAll').addEventListener('click', function(){
         if(confirm('Esto borrará todas las respuestas guardadas en este navegador. ¿Continuar?')){
           storage.clear();
-          for(const k in state) delete state[k];
+          for(var k in state) {
+            if(state.hasOwnProperty(k)){
+              delete state[k];
+            }
+          }
           render();
         }
       });
+      
       document.getElementById('addQuestion').addEventListener('click', addCustomQuestion);
+      
+      document.getElementById('customQuestion').addEventListener('keypress', function(e){
+        if(e.key === 'Enter'){
+          addCustomQuestion();
+        }
+      });
+      
       // Tests
       document.getElementById('runTests').addEventListener('click', runTests);
       document.getElementById('resetFactory').addEventListener('click', function(){
         storage.clear();
-        for(const k in state) delete state[k];
+        for(var k in state) {
+          if(state.hasOwnProperty(k)){
+            delete state[k];
+          }
+        }
         render();
         logTest('Restablecido a valores de fábrica.');
       });
     }
 
     // ---- Simple test harness ----
-    const out = document.getElementById('testOutput');
+    var out = document.getElementById('testOutput');
     function logTest(msg){ out.textContent += msg + "\n"; }
-    function assert(cond, msg){ if(!cond) throw new Error('❌ ' + msg); logTest('✅ ' + msg); }
+    function assert(cond, msg){ 
+      if(!cond) throw new Error('❌ ' + msg); 
+      logTest('✅ ' + msg); 
+    }
 
     function countTotalQuestions(){
-      return schema.reduce((acc, b)=> acc + b.qs.length, 0);
+      var total = 0;
+      for(var i = 0; i < schema.length; i++){
+        total += schema[i].qs.length;
+      }
+      return total;
     }
 
     function runTests(){
       out.textContent = '';
       try{
         // Test 1: Storage availability fallback works
-        const before = storage.available;
-        // simulate save
-        state['test__key']= 'valor-prueba';
+        state['test__key'] = 'valor-prueba';
         saveState();
         assert(true, 'Storage guarda sin lanzar excepción (fallback si está bloqueado).');
+        
         // Test 2: Render creates all textareas
         render();
-        const textareas = document.querySelectorAll('textarea');
-        assert(textareas.length === countTotalQuestions(), 'Render crea '+textareas.length+' textareas (coincide con el esquema).');
+        var textareas = document.querySelectorAll('textarea');
+        assert(textareas.length === countTotalQuestions(), 'Render crea ' + textareas.length + ' textareas (coincide con el esquema).');
+        
         // Test 3: Add custom question increases count
-        const prev = textareas.length;
+        var prev = textareas.length;
         document.getElementById('customQuestion').value = '¿Pregunta personalizada de prueba?';
         addCustomQuestion();
-        const now = document.querySelectorAll('textarea').length;
+        var now = document.querySelectorAll('textarea').length;
         assert(now === prev + 1, 'Agregar pregunta propia incrementa el total.');
+        
         // Test 4: Serializadores devuelven texto no vacío
-        const json = serializeToJson();
-        const txt = serializeToText();
-        assert(!!json && json.length>10, 'serializeToJson produce contenido.');
-        assert(!!txt && txt.length>10, 'serializeToText produce contenido.');
+        var json = serializeToJson();
+        var txt = serializeToText();
+        assert(!!json && json.length > 10, 'serializeToJson produce contenido.');
+        assert(!!txt && txt.length > 10, 'serializeToText produce contenido.');
+        
         // Test 5: Progress updates
-        const beforePct = document.getElementById('bar').style.width;
-        const anyTa = document.querySelector('textarea'); anyTa.value='algo'; anyTa.dispatchEvent(new Event('input'));
-        const afterPct = document.getElementById('bar').style.width;
+        var beforePct = document.getElementById('bar').style.width;
+        var anyTa = document.querySelector('textarea'); 
+        if(anyTa) {
+          anyTa.value = 'algo'; 
+          anyTa.dispatchEvent(new Event('input'));
+        }
+        var afterPct = document.getElementById('bar').style.width;
         assert(beforePct !== afterPct, 'La barra de progreso reacciona a cambios.');
+        
         logTest('\nTodas las pruebas pasaron.');
       }catch(err){
         logTest(String(err && err.message || err));
@@ -383,8 +531,20 @@
     }
 
     // ---- Init ----
-    bindUI();
-    render();
+    function init(){
+      // Asegurar que el DOM esté cargado
+      if(document.readyState === 'loading'){
+        document.addEventListener('DOMContentLoaded', function(){
+          bindUI();
+          render();
+        });
+      } else {
+        bindUI();
+        render();
+      }
+    }
+    
+    init();
   })();
   </script>
 </body>
